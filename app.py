@@ -1,16 +1,30 @@
+import logging
 import os
 from dotenv import load_dotenv
-from openai import OpenAI
+from openai import OpenAI, OpenAIError
 import gradio as gr
 
 # Load environment variables
 load_dotenv()
 
-# Create OpenAI client
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logger = logging.getLogger("travel-agent")
 
-# Model
-MODEL = "gpt-4o-mini"
+API_KEY = os.getenv("OPENAI_API_KEY")
+
+if not API_KEY:
+    raise SystemExit("OPENAI_API_KEY is not set. Add it to your .env file.")
+
+# Create OpenAI client
+client = OpenAI(api_key=API_KEY)
+
+# Model and generation settings
+MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+TEMPERATURE = float(os.getenv("OPENAI_TEMPERATURE", "0.4"))
+MAX_TOKENS = int(os.getenv("OPENAI_MAX_TOKENS", "800"))
+
+# Caps how much conversation is replayed to the model, bounding cost per turn
+MAX_HISTORY_MESSAGES = 20
 
 # System prompt
 SYSTEM_PROMPT = """
@@ -46,7 +60,7 @@ You should behave like a friendly professional travel agent.
 
 def travel_agent(message, history):
     """
-    Generate a response from the OpenAI model.
+    Stream a response from the OpenAI model into the chat history.
 
     message:
         Current user message
@@ -55,71 +69,59 @@ def travel_agent(message, history):
         Previous Gradio conversation
     """
 
-    history = history or []
+    history = list(history or [])
 
-    # Start with system message
-    messages = [
-        {
-            "role": "system",
-            "content": SYSTEM_PROMPT
-        }
+    if not message or not message.strip():
+        yield history, ""
+        return
+
+    prior = [
+        {"role": item["role"], "content": item["content"]}
+        for item in history
+        if isinstance(item, dict) and item.get("role") in ("user", "assistant")
     ]
 
-    # Add previous conversation
-    for item in history:
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages.extend(prior[-MAX_HISTORY_MESSAGES:])
+    messages.append({"role": "user", "content": message})
 
-        # New Gradio format
-        if isinstance(item, dict):
-            role = item.get("role")
-            content = item.get("content")
-
-            if role in ["user", "assistant"]:
-                messages.append({
-                    "role": role,
-                    "content": content
-                })
-
-        # Older Gradio format
-        elif isinstance(item, (list, tuple)) and len(item) == 2:
-
-            user_message, assistant_message = item
-
-            if user_message:
-                messages.append({
-                    "role": "user",
-                    "content": user_message
-                })
-
-            if assistant_message:
-                messages.append({
-                    "role": "assistant",
-                    "content": assistant_message
-                })
-
-    # Add current user message
-    messages.append({
-        "role": "user",
-        "content": message
-    })
-
-    # Call OpenAI
-    response = client.chat.completions.create(
-        model=MODEL,
-        messages=messages,
-        temperature=0.0,
-        max_tokens=300
-    )
-
-    # Extract response
-    answer = response.choices[0].message.content
-
-    # gr.Chatbot(type="messages") expects the full history back, not just the reply
-    new_history = history + [
+    # gr.Chatbot expects the full history back, not just the reply
+    history = history + [
         {"role": "user", "content": message},
-        {"role": "assistant", "content": answer},
+        {"role": "assistant", "content": ""},
     ]
 
-    return new_history, ""
+    # Show the caller's message immediately, before waiting on the model
+    yield history, ""
+
+    try:
+        stream = client.chat.completions.create(
+            model=MODEL,
+            messages=messages,
+            temperature=TEMPERATURE,
+            max_tokens=MAX_TOKENS,
+            stream=True,
+        )
+
+        for chunk in stream:
+            delta = chunk.choices[0].delta.content or ""
+
+            if delta:
+                history[-1]["content"] += delta
+                yield history, ""
+
+    except OpenAIError:
+        logger.exception("OpenAI request failed")
+        history[-1]["content"] = (
+            "Sorry, I couldn't reach the travel service just then. "
+            "Please try again in a moment."
+        )
+
+    yield history, ""
+
+
+def log_feedback(data: gr.LikeData):
+    logger.info("Feedback liked=%s value=%r", data.liked, data.value)
 
 
 # -----------------------------
@@ -135,24 +137,32 @@ with gr.Blocks(
         # 🇫🇷 Paris Travel Agent
 
         Ask me anything about traveling to Paris.
-
-        **Examples:**
-        - What is the most famous landmark in Paris?
-        - How far is the Louvre from the Eiffel Tower?
-        - What should I see at the Louvre?
-        - Can you create a 3-day Paris itinerary?
-        - What are the best areas to stay in Paris?
         """
     )
 
     chatbot = gr.Chatbot(
         label="Travel Agent",
-        height=500
+        height=500,
+        resizable=True,
+        placeholder="<h3>Bonjour! Ask me anything about visiting Paris.</h3>",
+        buttons=["copy", "copy_all"],
     )
 
     message = gr.Textbox(
         placeholder="Ask your travel question...",
         label="Your Question"
+    )
+
+    gr.Examples(
+        examples=[
+            "What is the most famous landmark in Paris?",
+            "How far is the Louvre from the Eiffel Tower?",
+            "What should I see at the Louvre?",
+            "Can you create a 3-day Paris itinerary?",
+            "What are the best areas to stay in Paris?",
+        ],
+        inputs=message,
+        label="Try one of these",
     )
 
     with gr.Row():
@@ -165,19 +175,23 @@ with gr.Blocks(
             "Clear Chat"
         )
 
-    # Send message
-    send_button.click(
-        travel_agent,
-        inputs=[message, chatbot],
-        outputs=[chatbot, message]
-    )
+    # Lock the controls while a response streams, so a turn can't be submitted twice
+    for trigger in (send_button.click, message.submit):
+        trigger(
+            lambda: (gr.update(interactive=False), gr.update(interactive=False)),
+            inputs=None,
+            outputs=[send_button, message],
+        ).then(
+            travel_agent,
+            inputs=[message, chatbot],
+            outputs=[chatbot, message],
+        ).then(
+            lambda: (gr.update(interactive=True), gr.update(interactive=True)),
+            inputs=None,
+            outputs=[send_button, message],
+        )
 
-    # Allow Enter key
-    message.submit(
-        travel_agent,
-        inputs=[message, chatbot],
-        outputs=[chatbot, message]
-    )
+    chatbot.like(log_feedback, inputs=None, outputs=None)
 
     # Clear conversation
     clear_button.click(

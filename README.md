@@ -17,9 +17,11 @@ The system prompt keeps the assistant on-topic and instructs it to say when it i
 ## How it works
 
 - `app.py` holds everything: the system prompt, the OpenAI call, and the Gradio UI.
-- The model is `gpt-4o-mini`, called with `temperature=0.0` and `max_tokens=300` for short, consistent answers.
-- Each turn, the full conversation history is replayed to the model so it keeps context.
-- The UI is built with `gr.Blocks`: a `gr.Chatbot` transcript, a textbox, and **Ask Travel Agent** / **Clear Chat** buttons.
+- Responses are **streamed**, so text appears token by token instead of after a long pause.
+- Each turn replays the recent conversation to the model, capped at `MAX_HISTORY_MESSAGES` so cost stays bounded on long chats.
+- API failures are caught and shown as a friendly message rather than a raw Gradio error.
+- The UI is built with `gr.Blocks`: a `gr.Chatbot` transcript, a textbox, clickable examples, and **Ask Travel Agent** / **Clear Chat** buttons. Controls lock while a response streams.
+- Thumbs up/down feedback is logged to the console via `chatbot.like`.
 
 > **Note on Gradio versions:** this project targets Gradio 6, where `gr.Chatbot` only supports the *messages* format. Handlers must return the **full history** as a list of `{"role": ..., "content": ...}` dictionaries — returning a bare string raises `Data incompatible with messages format`.
 
@@ -40,7 +42,7 @@ The system prompt keeps the assistant on-topic and instructs it to say when it i
 2. Install the dependencies:
 
    ```powershell
-   python -m pip install openai gradio python-dotenv
+   python -m pip install -r requirements.txt
    ```
 
 3. Create a `.env` file next to `app.py` with your key:
@@ -50,6 +52,18 @@ The system prompt keeps the assistant on-topic and instructs it to say when it i
    ```
 
    `.env` is listed in `.gitignore` — never commit your API key.
+
+### Optional settings
+
+These can also go in `.env`:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `OPENAI_MODEL` | `gpt-4o-mini` | Which chat model to call |
+| `OPENAI_TEMPERATURE` | `0.4` | Higher is more varied, lower is more repeatable |
+| `OPENAI_MAX_TOKENS` | `800` | Response length cap |
+
+The app exits with a clear message at startup if `OPENAI_API_KEY` is missing.
 
 ## Running
 
@@ -71,14 +85,13 @@ Gradio prints a local URL (typically `http://127.0.0.1:7860`). Open it in your b
 
 ```
 travel-ai-agent/
-├── app.py       # Prompt, OpenAI client and Gradio UI
-├── .env         # OPENAI_API_KEY (not committed)
+├── app.py             # Prompt, OpenAI client and Gradio UI
+├── requirements.txt   # Pinned dependencies
+├── .env               # OPENAI_API_KEY (not committed)
 ├── .gitignore
 ├── LICENSE
 └── README.md
 ```
-
-Consider adding `venv/` and `__pycache__/` to `.gitignore` — they are not currently excluded.
 
 ## Licence
 
