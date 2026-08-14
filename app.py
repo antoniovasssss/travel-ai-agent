@@ -1,5 +1,6 @@
 import logging
 import os
+import tempfile
 from dotenv import load_dotenv
 from openai import OpenAI, OpenAIError
 import gradio as gr
@@ -58,6 +59,15 @@ You should behave like a friendly professional travel agent.
 """
 
 
+def _message_text(content):
+    """gr.Chatbot message content can be a string or a list of parts; flatten to text."""
+
+    if isinstance(content, list):
+        return "".join(part if isinstance(part, str) else str(part) for part in content)
+
+    return content if isinstance(content, str) else str(content)
+
+
 def travel_agent(message, history):
     """
     Stream a response from the OpenAI model into the chat history.
@@ -72,11 +82,11 @@ def travel_agent(message, history):
     history = list(history or [])
 
     if not message or not message.strip():
-        yield history, ""
+        yield history, "", ""
         return
 
     prior = [
-        {"role": item["role"], "content": item["content"]}
+        {"role": item["role"], "content": _message_text(item["content"])}
         for item in history
         if isinstance(item, dict) and item.get("role") in ("user", "assistant")
     ]
@@ -92,7 +102,7 @@ def travel_agent(message, history):
     ]
 
     # Show the caller's message immediately, before waiting on the model
-    yield history, ""
+    yield history, "", ""
 
     try:
         stream = client.chat.completions.create(
@@ -101,14 +111,31 @@ def travel_agent(message, history):
             temperature=TEMPERATURE,
             max_tokens=MAX_TOKENS,
             stream=True,
+            stream_options={"include_usage": True},
         )
 
-        for chunk in stream:
-            delta = chunk.choices[0].delta.content or ""
+        usage = None
 
-            if delta:
-                history[-1]["content"] += delta
-                yield history, ""
+        for chunk in stream:
+            if chunk.choices:
+                delta = chunk.choices[0].delta.content or ""
+
+                if delta:
+                    history[-1]["content"] += delta
+                    yield history, "", gr.update()
+
+            if chunk.usage:
+                usage = chunk.usage
+
+        footer = ""
+        if usage:
+            footer = (
+                f"Last turn: {usage.prompt_tokens} prompt + "
+                f"{usage.completion_tokens} completion = {usage.total_tokens} tokens"
+            )
+
+        yield history, "", footer
+        return
 
     except OpenAIError:
         logger.exception("OpenAI request failed")
@@ -117,7 +144,44 @@ def travel_agent(message, history):
             "Please try again in a moment."
         )
 
-    yield history, ""
+    yield history, "", ""
+
+
+def regenerate(history):
+    """Drop the last exchange and resend the same user message."""
+
+    history = list(history or [])
+    last_user_message = None
+
+    for i in range(len(history) - 1, -1, -1):
+        if history[i].get("role") == "user":
+            last_user_message = _message_text(history[i]["content"])
+            history = history[:i]
+            break
+
+    if last_user_message is None:
+        yield history, "", ""
+        return
+
+    yield from travel_agent(last_user_message, history)
+
+
+def export_transcript(history):
+    """Write the conversation to a temp Markdown file for gr.DownloadButton."""
+
+    lines = ["# Paris Travel Agent - Conversation Transcript", ""]
+
+    for item in history or []:
+        role = item.get("role", "").capitalize()
+        lines.append(f"**{role}:** {_message_text(item.get('content', ''))}")
+        lines.append("")
+
+    path = os.path.join(tempfile.gettempdir(), "travel-agent-transcript.md")
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+
+    return path
 
 
 def log_feedback(data: gr.LikeData):
@@ -153,6 +217,8 @@ with gr.Blocks(
         label="Your Question"
     )
 
+    token_footer = gr.Markdown("")
+
     gr.Examples(
         examples=[
             "What is the most famous landmark in Paris?",
@@ -175,6 +241,14 @@ with gr.Blocks(
             "Clear Chat"
         )
 
+        regenerate_button = gr.Button(
+            "Regenerate"
+        )
+
+        export_button = gr.DownloadButton(
+            "Export Transcript"
+        )
+
     # Lock the controls while a response streams, so a turn can't be submitted twice
     for trigger in (send_button.click, message.submit):
         trigger(
@@ -184,20 +258,41 @@ with gr.Blocks(
         ).then(
             travel_agent,
             inputs=[message, chatbot],
-            outputs=[chatbot, message],
+            outputs=[chatbot, message, token_footer],
         ).then(
             lambda: (gr.update(interactive=True), gr.update(interactive=True)),
             inputs=None,
             outputs=[send_button, message],
         )
 
+    # Regenerate re-sends the last user message after dropping the last reply
+    regenerate_button.click(
+        lambda: gr.update(interactive=False),
+        inputs=None,
+        outputs=regenerate_button,
+    ).then(
+        regenerate,
+        inputs=[chatbot],
+        outputs=[chatbot, message, token_footer],
+    ).then(
+        lambda: gr.update(interactive=True),
+        inputs=None,
+        outputs=regenerate_button,
+    )
+
+    export_button.click(
+        export_transcript,
+        inputs=[chatbot],
+        outputs=export_button,
+    )
+
     chatbot.like(log_feedback, inputs=None, outputs=None)
 
     # Clear conversation
     clear_button.click(
-        lambda: ([], ""),
+        lambda: ([], "", ""),
         inputs=None,
-        outputs=[chatbot, message]
+        outputs=[chatbot, message, token_footer]
     )
 
 

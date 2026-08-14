@@ -7,7 +7,7 @@ A small chat app that acts as a friendly travel agent specialising in **Paris, F
 Ask it anything about visiting Paris and it will answer concisely and practically:
 
 - Landmarks, museums, restaurants and hotels
-- Getting around and distances between attractions
+- Transportation and distances between attractions
 - Neighbourhoods and where to stay
 - Suggested itineraries and best times to visit
 - General travel tips
@@ -21,9 +21,16 @@ The system prompt keeps the assistant on-topic and instructs it to say when it i
 - Each turn replays the recent conversation to the model, capped at `MAX_HISTORY_MESSAGES` so cost stays bounded on long chats.
 - API failures are caught and shown as a friendly message rather than a raw Gradio error.
 - The UI is built with `gr.Blocks`: a `gr.Chatbot` transcript, a textbox, clickable examples, and **Ask Travel Agent** / **Clear Chat** buttons. Controls lock while a response streams.
-- Thumbs up/down feedback is logged to the console via `chatbot.like`.
+- Thumbs up/down feedback is logged to the console via `chatbot.like` — this is a debugging aid only, not persisted anywhere.
 
 > **Note on Gradio versions:** this project targets Gradio 6, where `gr.Chatbot` only supports the *messages* format. Handlers must return the **full history** as a list of `{"role": ..., "content": ...}` dictionaries — returning a bare string raises `Data incompatible with messages format`.
+
+## Limitations
+
+- The model has no live data: opening hours, prices, availability and weather can be out of date or wrong.
+- It cannot book anything — flights, hotels, restaurants or tickets are outside its scope.
+- It only covers Paris; the system prompt is not currently parameterised for other destinations.
+- Streaming with `OPENAI_MAX_TOKENS=800` on every turn has a real per-message API cost — lower it if you want to control spend.
 
 ## Requirements
 
@@ -80,6 +87,12 @@ Gradio prints a local URL (typically `http://127.0.0.1:7860`). Open it in your b
 - What should I see at the Louvre?
 - Can you create a 3-day Paris itinerary?
 - What are the best areas to stay in Paris?
+
+## Troubleshooting
+
+- **`gradio.exceptions.Error: Data incompatible with messages format...`** — the chat handler returned a bare string instead of the full history as a list of `{"role", "content"}` dictionaries. Gradio 6's `gr.Chatbot` only accepts the messages format.
+- **`TypeError: Chatbot.__init__() got an unexpected keyword argument 'type'`** — Gradio 6 removed `type="messages"` from `gr.Chatbot` because it's now the only supported format; drop the argument.
+- **App exits immediately with `OPENAI_API_KEY is not set`** — add the key to `.env` next to `app.py`, or set it as an environment variable before running.
 
 ## Project structure
 
