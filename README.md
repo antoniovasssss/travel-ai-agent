@@ -10,6 +10,11 @@ Ask it anything about visiting Paris and it will answer concisely and practicall
 - Transportation and distances between attractions
 - Neighbourhoods and where to stay
 - Suggested itineraries and best times to visit
+- Entry requirements, including Schengen visa rules and ETIAS
+- Money, payment methods and tipping etiquette
+- Common tourist scams to watch out for
+- Museum, restaurant and shop closure patterns
+- Emergency numbers and basic etiquette
 - General travel tips
 
 The system prompt keeps the assistant on-topic and instructs it to say when it is unsure rather than inventing details.
@@ -18,6 +23,7 @@ The system prompt keeps the assistant on-topic and instructs it to say when it i
 
 - `app.py` holds everything: the system prompt, the OpenAI call, and the Gradio UI.
 - Responses are **streamed**, so text appears token by token instead of after a long pause.
+- The system prompt is grounded with the real current date/weekday on every request, so seasonal advice and day-of-week closure questions are answered with the actual date in mind.
 - Each turn replays the recent conversation to the model, capped at `MAX_HISTORY_MESSAGES` so cost stays bounded on long chats.
 - API failures are caught and shown as a friendly message rather than a raw Gradio error.
 - The UI is built with `gr.Blocks`: a `gr.Chatbot` transcript, a textbox, clickable examples, and **Ask Travel Agent** / **Clear Chat** buttons. Controls lock while a response streams.
@@ -27,7 +33,7 @@ The system prompt keeps the assistant on-topic and instructs it to say when it i
 
 ## Limitations
 
-- The model has no live data: opening hours, prices, availability and weather can be out of date or wrong.
+- The model has no live data: opening hours, prices, availability, strikes, weather and events can be out of date or wrong. The prompt tells users to verify time-sensitive details against official sources.
 - It cannot book anything — flights, hotels, restaurants or tickets are outside its scope.
 - It only covers Paris; the system prompt is not currently parameterised for other destinations.
 - Streaming with `OPENAI_MAX_TOKENS=800` on every turn has a real per-message API cost — lower it if you want to control spend.
@@ -87,6 +93,9 @@ Gradio prints a local URL (typically `http://127.0.0.1:7860`). Open it in your b
 - What should I see at the Louvre?
 - Can you create a 3-day Paris itinerary?
 - What are the best areas to stay in Paris?
+- Do I need a visa or ETIAS to visit Paris?
+- What common tourist scams should I watch out for in Paris?
+- What's the tipping etiquette at French restaurants?
 
 ## Troubleshooting
 

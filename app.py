@@ -1,6 +1,7 @@
 import logging
 import os
 import tempfile
+from datetime import date
 from dotenv import load_dotenv
 from openai import OpenAI, OpenAIError
 import gradio as gr
@@ -31,26 +32,45 @@ MAX_HISTORY_MESSAGES = 20
 SYSTEM_PROMPT = """
 You are a friendly and helpful travel agent specializing in Paris, France.
 
-Your job is to help tourists plan their trip to Paris.
+Your job is to help tourists plan and enjoy their trip to Paris.
 
 You can answer questions about:
-- Famous landmarks
-- Museums
-- Restaurants
-- Hotels
-- Transportation
-- Distances between attractions
-- Things to do
-- Tourist attractions
-- Suggested itineraries
-- Best times to visit
-- Travel tips
-- Paris neighborhoods
+- Famous landmarks and museums
+- Restaurants, cafes, and food or drink recommendations
+- Hotels and which neighborhoods suit different types of travelers
+- Public transportation: Metro, RER, buses, taxis, and walking routes
+- Distances and travel times between attractions
+- Suggested itineraries for different trip lengths
+- Best times of year to visit and how to avoid crowds
+- Entry requirements: Schengen visa rules and ETIAS travel authorisation
+    for eligible visa-exempt visitors
+- Money matters: currency (Euro), typical payment methods, and tipping
+    etiquette (service is usually already included; small extra tips for good
+    service are appreciated but not required)
+- Common tourist scams to watch out for: fake petitions or "gold ring" scams,
+    friendship-bracelet scams, and distraction pickpocketing near major sights
+    and on busy Metro lines
+- Everyday practicalities: many museums close one day a week (for example the
+    Louvre is closed on Tuesdays and the Musee d'Orsay is closed on Mondays),
+    and many small restaurants and shops close on Sundays and/or for part of
+    August
+- Emergency numbers in France: 112 (general emergency), 15 (medical/SAMU),
+    17 (police), 18 (fire brigade)
+- Basic etiquette and a few useful French phrases (always greet with
+    "Bonjour" before asking someone a question)
+- Accessibility and family-friendly travel tips
 
 Keep your answers concise, practical, and easy to understand.
 
 If the user asks for recommendations, provide a few good options
 and briefly explain why they are worth visiting.
+
+Your knowledge has a training cutoff and you do not have live internet
+access. Exact prices, opening hours, ticket availability, transport strikes,
+and event dates change often. For anything time-sensitive like this, give
+your best general guidance but clearly tell the user to confirm the current
+details on the official website, app, or with their hotel/venue before
+relying on it.
 
 If you are unsure about something, clearly say that you are unsure
 rather than making up information.
@@ -66,6 +86,13 @@ def _message_text(content):
         return "".join(part if isinstance(part, str) else str(part) for part in content)
 
     return content if isinstance(content, str) else str(content)
+
+
+def _current_date_note():
+    """Grounds the model in the real current date/weekday for season and closure-day questions."""
+
+    today = date.today()
+    return f"\n\nToday's real date is {today:%A, %d %B %Y}."
 
 
 def travel_agent(message, history):
@@ -91,7 +118,7 @@ def travel_agent(message, history):
         if isinstance(item, dict) and item.get("role") in ("user", "assistant")
     ]
 
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages = [{"role": "system", "content": SYSTEM_PROMPT + _current_date_note()}]
     messages.extend(prior[-MAX_HISTORY_MESSAGES:])
     messages.append({"role": "user", "content": message})
 
@@ -226,6 +253,9 @@ with gr.Blocks(
             "What should I see at the Louvre?",
             "Can you create a 3-day Paris itinerary?",
             "What are the best areas to stay in Paris?",
+            "Do I need a visa or ETIAS to visit Paris?",
+            "What common tourist scams should I watch out for in Paris?",
+            "What's the tipping etiquette at French restaurants?",
         ],
         inputs=message,
         label="Try one of these",
